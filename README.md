@@ -1,5 +1,8 @@
 # YouTube Genocide Analysis Toolkit
 
+![image](https://github.com/user-attachments/assets/40517747-572a-4405-a537-8a6fdc573ace)
+
+
 A specialised Python tool designed to detect potential incitement to genocide in YouTube video transcripts. This toolkit extracts YouTube video transcripts and analyzes them against international legal standards for genocide incitement using OpenAI's language models.
 
 ## Features
@@ -62,6 +65,12 @@ python genocide_detect.py https://www.youtube.com/watch?v=VIDEO_ID
 # Direct analysis (video ID only)
 python genocide_detect.py VIDEO_ID
 ```
+
+![image](https://github.com/user-attachments/assets/c29106e6-fe1e-482d-9726-b0354f6a20c8)
+
+![image](https://github.com/user-attachments/assets/0bf789c5-b373-44c2-a2e9-c8b535e196c8)
+
+
 
 #### Extract Only
 
