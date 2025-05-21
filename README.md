@@ -90,6 +90,66 @@ prompt = """
 
 ![image](https://github.com/user-attachments/assets/0bf789c5-b373-44c2-a2e9-c8b535e196c8)
 
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────────────┐
+│  Input YouTube  │     │ Extract Video ID │     │ Check SQLite Cache for  │
+│  URL or Video ID│---->│ from URL (if URL)│---->│ Existing Transcript     │
+└─────────────────┘     └─────────────────┘     └───────────┬─────────────┘
+                                                            │
+                ┌───────────────────────────────────────────┴───────────┐
+                │                                                       │
+    ┌───────────▼───────────┐                              ┌────────────▼─────────┐
+    │ If Not in Cache:      │                              │ If Found in Cache:    │
+    │ Fetch Transcript using│                              │ Load Transcript from  │
+    │ YouTube Transcript API│                              │ Database              │
+    └───────────┬───────────┘                              └────────────┬─────────┘
+                │                                                       │
+    ┌───────────▼───────────┐                                           │
+    │ Fetch Video Metadata  │                                           │
+    │ (title, channel) using│                                           │
+    │ yt-dlp or pytube      │                                           │
+    └───────────┬───────────┘                                           │
+                │                                                       │
+    ┌───────────▼───────────┐                                           │
+    │ Save Transcript to:   │                                           │
+    │ 1. Text File          │                                           │
+    │ 2. SQLite Database    │                                           │
+    └───────────┬───────────┘                                           │
+                └───────────────────────────────────┬─────────────────────┘
+                                                    │
+                             ┌─────────────────────▼──────────────────────┐
+                             │ Check for Existing Analysis in Database     │
+                             │ (Skip if --force-analysis flag used)        │
+                             └─────────────────────┬──────────────────────┘
+                                                   │
+                 ┌─────────────────────────────────┴───────────────────────┐
+                 │                                                         │
+     ┌───────────▼─────────────┐                           ┌───────────────▼─────────┐
+     │ If No Analysis Found:   │                           │ If Analysis Found:      │
+     │ Send Transcript to      │                           │ Return Cached Analysis  │
+     │ OpenAI with Genocide    │                           │ Results                 │
+     │ Analysis System Prompt  │                           │                         │
+     └───────────┬─────────────┘                           └───────────────┬─────────┘
+                 │                                                         │
+     ┌───────────▼─────────────┐                                           │
+     │ Parse JSON Response     │                                           │
+     │ into GenocideVerdict    │                                           │
+     │ with answer, reasoning, │                                           │
+     │ and evidence            │                                           │
+     └───────────┬─────────────┘                                           │
+                 │                                                         │
+     ┌───────────▼─────────────┐                                           │
+     │ Save Analysis Results:  │                                           │
+     │ 1. SQLite Database      │                                           │
+     │ 2. JSON File            │                                           │
+     └───────────┬─────────────┘                                           │
+                 └─────────────────────────────────┬─────────────────────────┘
+                                                   │
+                             ┌─────────────────────▼──────────────────────┐
+                             │ Display Formatted Results to User          │
+                             │ with Rich Text Formatting                  │
+                             └──────────────────────────────────────────────┘
+```
 ## Installation
 
 1. Clone this repository:
