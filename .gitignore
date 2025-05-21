@@ -1,1 +1,4 @@
 /.env
+/data/individual_results/
+/data/transcripts/
+/data/youtube_transcripts.db

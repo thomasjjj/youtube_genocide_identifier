@@ -1,198 +1,227 @@
-import asyncio
-import logging
+# app.py — Typer CLI for “YouTube-rhetoric” pipeline
+# ────────────────────────────────────────────────────────────────────────────
+# • Step 1  Fetch/cache a YouTube transcript in SQLite + text file
+# • Step 2  Send transcript to OpenAI, store + pretty-print the verdict
+# ---------------------------------------------------------------------------
+from __future__ import annotations
 from datetime import datetime
+
+import asyncio
+import json
+import logging
+import sqlite3
 from pathlib import Path
+from typing import Optional
 
-# Import from existing modules
-from src.youtube_transcript import extract_video_id, get_transcript, save_transcript
-from src.youtube_metadata import get_video_metadata, get_video_metadata_pytube
+import typer
+from rich import print as rprint
+from typer import Context
+
+from config import RESULTS_DIR, ensure_dirs_exist
 from src.gpt import TranscriptAnalyzer
-from config import ensure_dirs_exist, load_env_vars, get_openai_api_key, RESULTS_DIR
+from src.youtube_transcript import (
+    extract_video_id,
+    fetch_transcript,
+    save_transcript,
+)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# ── logging ————————————————————————————————————————————————————————————
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 logger = logging.getLogger(__name__)
 
+# ── Typer app ————————————————————————————————————————————————————————————
+app = typer.Typer(
+    add_completion=False,
+    rich_markup_mode="rich",
+    help="""
+CLI helper that **(1)** grabs a YouTube transcript and **(2)** runs the
+OpenAI genocide-intent analysis.  If you launch it without arguments it
+falls back to a single interactive prompt.
+""",
+)
 
-async def main():
+# ── lazy singleton for the analyzer ————————————————————————————————
+_analyzer: Optional[TranscriptAnalyzer] = None
+
+
+def _get_analyzer() -> TranscriptAnalyzer:
+    global _analyzer  # noqa: PLW0603
+    if _analyzer is None:
+        _analyzer = TranscriptAnalyzer()
+    return _analyzer
+
+
+# ── helpers ————————————————————————————————————————————————————————
+
+
+def _pretty_json(data: dict) -> str:
+    """Pretty-print dicts that may contain datetime objects."""
+    return json.dumps(
+        data,
+        indent=2,
+        ensure_ascii=False,
+        default=lambda o: o.isoformat() if isinstance(o, datetime) else str(o),
+    )
+
+
+
+def _save_json_to_file(data: dict, path: Path) -> None:
+    path.write_text(_pretty_json(data), encoding="utf-8")
+
+
+def _acquire_transcript(video_id: str, *, overwrite: bool = False):
     """
-    Main application logic for YouTube transcript analysis for incitement to genocide.
+    Return a SQLite row for `transcripts` (fetch and/or insert as needed).
+
+    Handles first-run DBs that might still miss the table.
     """
-    print("\n===== YouTube Genocide Incitement Analysis Tool =====\n")
-    print("This tool analyzes YouTube video transcripts to determine if they contain")
-    print("content that qualifies as incitement to genocide according to")
-    print("international law standards and the Rome Statute.\n")
+    analyzer = _get_analyzer()
 
-    # Initialize environment
-    ensure_dirs_exist()
-    load_env_vars()
-    get_openai_api_key()  # Ensure we have the API key
-
-    # Initialize the transcript analyzer
-    analyzer = TranscriptAnalyzer()
-
+    # Existing transcript in DB? (handle ancient DBs missing table)
     try:
-        # Get YouTube URL from user
-        youtube_url = input("Enter the YouTube video URL: ")
-
-        # Extract video ID
-        video_id = extract_video_id(youtube_url)
-        print(f"Extracted video ID: {video_id}")
-
-        # Check if this video has already been analyzed
-        has_analysis, prev_analysis = analyzer.check_if_video_analyzed(video_id)
-
-        if has_analysis:
-            print(f"\nThis video has already been analyzed on {prev_analysis['analysis_date']}")
-            print(f"Previous analysis used model: {prev_analysis['model']}")
-            parsed = prev_analysis['parsed_answer']
-            print(f"Previous result: {parsed['answer']}")
-
-            reanalyze = input("\nDo you want to reanalyze this video? (y/n): ").strip().lower()
-            if reanalyze != 'y':
-                # Display the previous analysis
-                print("\n===== Previous Genocide Incitement Analysis Result =====")
-                print(f"Video: {prev_analysis['video_title']}")
-                print(
-                    f"Channel: {prev_analysis['channel_name'] if 'channel_name' in prev_analysis else 'Unknown Channel'}")
-                print(f"Video ID: {prev_analysis['video_id']}")
-                print(f"Analysis Date: {prev_analysis['analysis_date']}")
-                print("-" * 60)
-                print(f"Question: Does the content incite genocide?")
-                print(f"Answer: {parsed['answer']}")
-                print("\nReasoning:")
-                print(parsed['reasoning'])
-                print("\nEvidence:")
-                for i, evidence in enumerate(parsed['evidence'], 1):
-                    print(f"{i}. {evidence}")
-                print("-" * 60)
-                print(f"Model: {prev_analysis['model']}")
-                print(f"Tokens used: {prev_analysis['tokens_used']}")
-
-                # Exit
-                return
-
-        # Continue with transcript extraction
-        transcript_record = analyzer.get_transcript_by_video_id(video_id)
-
-        if not transcript_record:
-            # We need to fetch and save the transcript
-            print(f"\nFetching transcript for video ID: {video_id}...")
-            transcript_data = get_transcript(video_id)
-
-            if not transcript_data:
-                print("Failed to retrieve transcript. Please check if the video has captions.")
-                return
-
-            print("Transcript retrieved successfully!")
-
-            # Try to automatically get video metadata
-            video_title, channel_name = get_video_metadata(video_id)
-
-            # If automatic retrieval succeeded, inform the user and give option to override
-            if video_title:
-                print(f"Automatically retrieved video title: {video_title}")
-                override = input("Do you want to override this title? (y/n, press Enter for no): ").strip().lower()
-                if override == 'y':
-                    video_title = input("Enter the video title: ").strip()
-            else:
-                # If automatic retrieval failed, ask the user
-                video_title = input("Enter the video title (optional, press Enter to skip): ").strip()
-                if not video_title:
-                    video_title = f"Unknown Title - {video_id}"
-
-            if channel_name:
-                print(f"Automatically retrieved channel name: {channel_name}")
-                override = input(
-                    "Do you want to override this channel name? (y/n, press Enter for no): ").strip().lower()
-                if override == 'y':
-                    channel_name = input("Enter the channel name: ").strip()
-            else:
-                channel_name = input("Enter the channel name (optional, press Enter to skip): ").strip()
-                if not channel_name:
-                    channel_name = "Unknown Channel"
-
-            # Save the transcript to file and database
-            formatted_transcripts = []
-            for entry in transcript_data:
-                formatted_transcripts.append(entry)
-
-            filename, db_success = save_transcript(formatted_transcripts, video_id, video_title, channel_name)
-
-            if not db_success:
-                print("Warning: Transcript saved to file but there was an error saving to database.")
-                return
-
-            # Get the transcript record from the database
-            transcript_record = analyzer.get_transcript_by_video_id(video_id)
+        rec = analyzer.get_transcript_by_video_id(video_id)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            rec = None  # first run on old DB — we'll create it below
         else:
-            print(f"\nFound existing transcript for: {transcript_record['video_title']}")
-            print(f"Channel: {transcript_record['channel_name']}")
+            raise
 
-        # Analyze for genocide incitement
-        print(f"\nAnalyzing video: {transcript_record['video_title']}")
-        print("Analysis: Checking for incitement to genocide based on Rome Statute definition")
-        print("Processing with OpenAI... (this may take a moment)")
+    if rec and not overwrite:
+        return rec  # ✅ cache hit
 
-        result = await analyzer.analyze_genocide_incitement(transcript_record)
+    # Otherwise download (or overwrite) transcript
+    rprint("[cyan]\nFetching transcript – this may take a few seconds…")
+    transcript = fetch_transcript(video_id)
+    file_path, saved_to_db = save_transcript(
+        transcript, video_id, overwrite=overwrite
+    )
+    tag = "saved" if saved_to_db else "updated" if overwrite else "skipped"
+    rprint(f"[green]Transcript {tag} → {file_path}")
 
-        if "error" in result:
-            print(f"\nError during analysis: {result['error']}")
-            return
-
-        # Print the result in a user-friendly format
-        print("\n===== Genocide Incitement Analysis Result =====")
-        print(f"Video: {transcript_record['video_title']}")
-        print(f"Channel: {transcript_record['channel_name']}")
-        print(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print("-" * 60)
-        print(f"Question: Does the content incite genocide?")
-        print(f"Answer: {result['answer']}")
-        print("\nReasoning:")
-        print(result['reasoning'])
-        print("\nEvidence:")
-        for i, evidence in enumerate(result['evidence'], 1):
-            print(f"{i}. {evidence}")
-        print("-" * 60)
-        print(f"Model: {result['model']}")
-        print(f"Tokens used: {result['tokens_used']}")
-
-        # Ensure RESULTS_DIR is a Path object
-        results_dir = Path(RESULTS_DIR) if isinstance(RESULTS_DIR, str) else RESULTS_DIR
-
-        # Make sure the directory exists
-        results_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save the results to a text file in the individual_results directory
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        result_filename = results_dir / f"genocide_analysis_{video_id}_{timestamp}.txt"
-
-        with open(result_filename, 'w', encoding='utf-8') as f:
-            f.write(f"GENOCIDE INCITEMENT ANALYSIS RESULT\n")
-            f.write(f"================================\n\n")
-            f.write(f"Video: {transcript_record['video_title']}\n")
-            f.write(f"Channel: {transcript_record['channel_name']}\n")
-            f.write(f"Video ID: {video_id}\n")
-            f.write(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"QUESTION: Does the content incite genocide?\n")
-            f.write(f"ANSWER: {result['answer']}\n\n")
-            f.write(f"REASONING:\n{result['reasoning']}\n\n")
-            f.write(f"EVIDENCE:\n")
-            for i, evidence in enumerate(result['evidence'], 1):
-                f.write(f"{i}. {evidence}\n")
-            f.write(f"\nAnalysis performed using: {result['model']}\n")
-            f.write(f"Tokens used: {result['tokens_used']}\n")
-
-        print(f"\nAnalysis result saved to: {result_filename}")
-
-    except Exception as e:
-        logger.error("Error in main application: %s", e, exc_info=True)
-        print(f"\nAn error occurred: {str(e)}")
-    finally:
-        # Clean up connections
-        if 'analyzer' in locals():
-            analyzer.close()
+    return analyzer.get_transcript_by_video_id(video_id)
 
 
+# ── default (no sub-command) ————————————————————————————————————————
+
+
+@app.callback(invoke_without_command=True)
+def _default(ctx: Context):
+    if ctx.invoked_subcommand:
+        return  # a real sub-command was chosen
+
+    # Interactive prompt — user preference
+    url = input("Enter the YouTube video URL (or ID): ").strip()
+    ensure_dirs_exist()
+    video_id = extract_video_id(url) if "http" in url else url
+
+    # 1️⃣ transcript
+    try:
+        transcript_rec = _acquire_transcript(video_id)
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]Transcript step failed: {exc}")
+        raise typer.Exit(1)
+
+    # 2️⃣ analysis
+    analyzer = _get_analyzer()
+    rprint("[cyan]\nRunning OpenAI analysis … this might take a while.")
+    try:
+        verdict = asyncio.run(analyzer.analyze(transcript_rec))
+    except Exception as exc:  # noqa: BLE001
+        rprint(f"[red]OpenAI call failed: {exc}")
+        raise typer.Exit(1)
+
+    # ── output ————————————————————————————————————————————————
+    rprint("\n[bold magenta]— Analysis Result —")
+    pretty = _pretty_json(verdict.model_dump())
+    rprint(pretty)
+
+    results_dir = Path(RESULTS_DIR)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out = results_dir / f"analysis_{video_id}_{verdict.timestamp:%Y%m%d_%H%M%S}.json"
+    _save_json_to_file(verdict.model_dump(), out)
+    rprint(f"[green]\nResult saved to: {out}")
+
+    raise typer.Exit()
+
+
+# ── sub-commands ——————————————————————————————————————————————————————
+
+
+@app.command()
+def extract(
+    url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", "-o", help="Force re-download if present"
+    ),
+):
+    """Only fetch & store the transcript (skip analysis)."""
+    ensure_dirs_exist()
+    video_id = extract_video_id(url) if "http" in url else url
+    _acquire_transcript(video_id, overwrite=overwrite)
+    rprint("[bold green]\nDone!")
+
+
+@app.command()
+def analyze(
+    url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
+    force_extract: bool = typer.Option(
+        False, "--force-extract", "-E", help="Re-download transcript"
+    ),
+    force_analysis: bool = typer.Option(
+        False, "--force-analysis", "-A", help="Ignore cached verdict"
+    ),
+):
+    """End-to-end pipeline (transcript + analysis) with cache controls."""
+    ensure_dirs_exist()
+    video_id = extract_video_id(url) if "http" in url else url
+
+    transcript_rec = _acquire_transcript(video_id, overwrite=force_extract)
+    if transcript_rec is None:
+        rprint("[red]Could not acquire transcript; aborting.")
+        raise typer.Exit(1)
+
+    analyzer = _get_analyzer()
+
+    if not force_analysis:
+        cached = analyzer.last_verdict_for_video(video_id)
+        if cached:
+            rprint("[green]Using cached analysis "
+                   "(--force-analysis to override):")
+            rprint(_pretty_json(cached.model_dump()))
+            raise typer.Exit()
+
+    rprint("[cyan]\nRunning OpenAI analysis … this might take a while.")
+    verdict = asyncio.run(analyzer.analyze(transcript_rec))
+
+    rprint("\n[bold magenta]— Analysis Result —")
+    pretty = _pretty_json(verdict.model_dump())
+    rprint(pretty)
+
+    results_dir = Path(RESULTS_DIR)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    out = results_dir / f"analysis_{video_id}_{verdict.timestamp:%Y%m%d_%H%M%S}.json"
+    _save_json_to_file(verdict.model_dump(), out)
+    rprint(f"[green]\nResult saved to: {out}")
+
+
+@app.command(name="list")
+def _list(
+    limit: int = typer.Option(10, "--limit", "-n", help="Rows to show"),
+):
+    """Show the latest transcripts already in the DB."""
+    rows = _get_analyzer().list_available_transcripts(limit)
+    if not rows:
+        rprint("[yellow]No transcripts found. Run the extractor first.")
+        raise typer.Exit(1)
+
+    for r in rows:
+        dt = r["extraction_date"].split("T")[0]
+        rprint(f"[cyan]{r['id']:>4}[/] | {dt} | {r['video_title']}")
+
+
+# ── entry-point ——————————————————————————————————————————————————————
 if __name__ == "__main__":
-    asyncio.run(main())
+    app()
