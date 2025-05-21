@@ -94,24 +94,66 @@ def _acquire_transcript(video_id: str, *, overwrite: bool = False):
 
     # Otherwise download (or overwrite) transcript
     rprint("[cyan]\nFetching transcript – this may take a few seconds…")
-    transcript = fetch_transcript(video_id)
-    file_path, saved_to_db = save_transcript(
-        transcript, video_id, overwrite=overwrite
-    )
-    tag = "saved" if saved_to_db else "updated" if overwrite else "skipped"
-    rprint(f"[green]Transcript {tag} → {file_path}")
 
-    return analyzer.get_transcript_by_video_id(video_id)
+    try:
+        # Fetch transcript data and language
+        transcript_data, transcript_lang = fetch_transcript(video_id)
+
+        # Make sure transcript_data is a list we can work with
+        if not isinstance(transcript_data, list):
+            rprint("[yellow]Warning: Transcript data is not a list, attempting to convert...")
+            try:
+                # Try to convert to a list if it's iterable
+                transcript_data = list(transcript_data)
+            except Exception as e:
+                rprint(f"[red]Failed to convert transcript data to list: {e}")
+                # Create a simple list with just the string representation
+                transcript_data = [{'text': str(transcript_data), 'start': 0.0, 'duration': 0.0}]
+
+        # Verify we have something to work with
+        if not transcript_data:
+            rprint("[red]Empty transcript data received")
+            raise ValueError("Empty transcript data")
+
+        # Save the transcript
+        file_path, saved_to_db = save_transcript(
+            transcript_data,
+            video_id,
+            transcript_language=transcript_lang,
+            overwrite=overwrite
+        )
+
+        tag = "saved" if saved_to_db else "updated" if overwrite else "skipped"
+        rprint(f"[green]Transcript {tag} → {file_path}")
+
+        # Get the updated record
+        return analyzer.get_transcript_by_video_id(video_id)
+
+    except Exception as exc:
+        rprint(f"[red]Error in _acquire_transcript: {exc}")
+        raise
 
 
 def process_video(video_id: str, force_extract: bool = False, force_analysis: bool = False):
     """Process a video through the entire pipeline: extraction + analysis."""
     # 1️⃣ transcript
     try:
+        # Use _acquire_transcript which properly handles the transcript fetching and saving
         transcript_rec = _acquire_transcript(video_id, overwrite=force_extract)
+
         if transcript_rec is None:
             rprint("[red]Could not acquire transcript; aborting.")
             raise typer.Exit(1)
+
+        # Display language information if available
+        # sqlite3.Row objects support dictionary-style access but not .get() method
+        # So we need to check if the key exists first
+        if "transcript_language" in transcript_rec.keys():
+            transcript_lang = transcript_rec["transcript_language"]
+            if transcript_lang and transcript_lang.lower() != 'en':
+                rprint(f"[yellow]Note: Using transcript in language: {transcript_lang}")
+                rprint("[yellow]Analysis may be less accurate for non-English content.")
+
     except Exception as exc:  # noqa: BLE001
         rprint(f"[red]Transcript step failed: {exc}")
         raise typer.Exit(1)
@@ -129,14 +171,14 @@ def process_video(video_id: str, force_extract: bool = False, force_analysis: bo
                 rprint(_pretty_json(cached.model_dump()))
                 return cached
 
-    rprint("[cyan]\nRunning OpenAI analysis … this might take a while.")
+    rprint("[cyan]\nRunning OpenAI analysis ... this might take a while.")
     try:
         verdict = asyncio.run(analyzer.analyze(transcript_rec))
     except Exception as exc:  # noqa: BLE001
         rprint(f"[red]OpenAI call failed: {exc}")
         raise typer.Exit(1)
 
-    # ── output ————————————————————————————————————————————————
+    # ── output ────────────────────────────────────────────────
     rprint("\n[bold magenta]— Analysis Result —")
     pretty = _pretty_json(verdict.model_dump())
     rprint(pretty)
@@ -145,8 +187,8 @@ def process_video(video_id: str, force_extract: bool = False, force_analysis: bo
     results_dir.mkdir(parents=True, exist_ok=True)
     out = results_dir / f"analysis_{video_id}_{verdict.timestamp:%Y%m%d_%H%M%S}.json"
     _save_json_to_file(verdict.model_dump(), out)
-    rprint(f"[green]\nResult saved to: {out}")
 
+    rprint(f"[green]\nResult saved to: {out}")
     return verdict
 
 

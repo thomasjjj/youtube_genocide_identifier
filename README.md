@@ -1,15 +1,22 @@
-# YouTube Incitement of Genocide Analysis Toolkit
+# YouTube ```Incitement of Genocide``` Analysis Toolkit
 
 ![image](https://github.com/user-attachments/assets/40517747-572a-4405-a537-8a6fdc573ace)
 
 A specialised Python tool designed to detect potential incitement to genocide in YouTube video transcripts. This toolkit extracts YouTube video transcripts and analyses them against international legal standards for genocide incitement using OpenAI's language models.
 
+> THIS SCRIPT IS IN EARLY STAGES AND MUST NOT BE DEEMED RELIABLE UNTIL FURTHER WORK IS DONE
+
 The intent of this tool is to enable media monitors and analysts to have rapid assessments of potentially problematic materials disseminated on YouTube. This includes news broadcasts and unofficial videos. It streamlines the analysis which typically requires a person to watch and transcribe hours of footage - most of which is not relevant. 
 
-This is an early public version of the tool and it does require further work to make it as accessible and accurate as possible. 
+This is an early public version of the tool and it requires further work to make it as accessible and accurate as possible. Please feel free to submit issues.
+
+- IT **IS**: a tool to make collection and analysis of information easier.
+- IT **IS NOT**: a legal tool that can be used without oversight.
+
+It should be noted that this tool is extremely strict and so will only pass information exactly matching the criteria. It will also take 
 
 
-It takes the official definition from the Rome Statute:
+It takes the official definition from the [Rome Statute](https://www.icc-cpi.int/sites/default/files/2024-05/Rome-Statute-eng.pdf):
 
 ```python
 prompt = """
