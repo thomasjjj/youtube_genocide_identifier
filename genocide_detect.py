@@ -1,4 +1,4 @@
-# app.py — Typer CLI for “YouTube-rhetoric” pipeline
+# genocide_detect.py — Typer CLI for "YouTube-rhetoric" pipeline
 # ────────────────────────────────────────────────────────────────────────────
 # • Step 1  Fetch/cache a YouTube transcript in SQLite + text file
 # • Step 2  Send transcript to OpenAI, store + pretty-print the verdict
@@ -38,8 +38,9 @@ app = typer.Typer(
     rich_markup_mode="rich",
     help="""
 CLI helper that **(1)** grabs a YouTube transcript and **(2)** runs the
-OpenAI genocide-intent analysis.  If you launch it without arguments it
-falls back to a single interactive prompt.
+OpenAI genocide-intent analysis. Simply provide a YouTube URL to run the
+full pipeline automatically. If you launch it without arguments, it will
+prompt you for a URL.
 """,
 )
 
@@ -65,7 +66,6 @@ def _pretty_json(data: dict) -> str:
         ensure_ascii=False,
         default=lambda o: o.isoformat() if isinstance(o, datetime) else str(o),
     )
-
 
 
 def _save_json_to_file(data: dict, path: Path) -> None:
@@ -104,28 +104,31 @@ def _acquire_transcript(video_id: str, *, overwrite: bool = False):
     return analyzer.get_transcript_by_video_id(video_id)
 
 
-# ── default (no sub-command) ————————————————————————————————————————
-
-
-@app.callback(invoke_without_command=True)
-def _default(ctx: Context):
-    if ctx.invoked_subcommand:
-        return  # a real sub-command was chosen
-
-    # Interactive prompt — user preference
-    url = input("Enter the YouTube video URL (or ID): ").strip()
-    ensure_dirs_exist()
-    video_id = extract_video_id(url) if "http" in url else url
-
+def process_video(video_id: str, force_extract: bool = False, force_analysis: bool = False):
+    """Process a video through the entire pipeline: extraction + analysis."""
     # 1️⃣ transcript
     try:
-        transcript_rec = _acquire_transcript(video_id)
+        transcript_rec = _acquire_transcript(video_id, overwrite=force_extract)
+        if transcript_rec is None:
+            rprint("[red]Could not acquire transcript; aborting.")
+            raise typer.Exit(1)
     except Exception as exc:  # noqa: BLE001
         rprint(f"[red]Transcript step failed: {exc}")
         raise typer.Exit(1)
 
     # 2️⃣ analysis
     analyzer = _get_analyzer()
+
+    # Check for cached analysis if not forcing
+    if not force_analysis:
+        # Only check cache if analyzer has the method
+        if hasattr(analyzer, 'last_verdict_for_video'):
+            cached = analyzer.last_verdict_for_video(video_id)
+            if cached:
+                rprint("[green]Using cached analysis (use --force-analysis to override):")
+                rprint(_pretty_json(cached.model_dump()))
+                return cached
+
     rprint("[cyan]\nRunning OpenAI analysis … this might take a while.")
     try:
         verdict = asyncio.run(analyzer.analyze(transcript_rec))
@@ -144,6 +147,43 @@ def _default(ctx: Context):
     _save_json_to_file(verdict.model_dump(), out)
     rprint(f"[green]\nResult saved to: {out}")
 
+    return verdict
+
+
+# ── default (no sub-command) ————————————————————————————————————————
+
+
+@app.callback(invoke_without_command=True)
+def _default(
+        ctx: Context,
+        url: str = typer.Argument(None, help="YouTube URL or 11-char ID"),
+        force_extract: bool = typer.Option(
+            False, "--force-extract", "-E", help="Re-download transcript"
+        ),
+        force_analysis: bool = typer.Option(
+            False, "--force-analysis", "-A", help="Ignore cached verdict"
+        ),
+):
+    """Run the full pipeline: extract transcript and analyze content."""
+    if ctx.invoked_subcommand:
+        return  # a real sub-command was chosen
+
+    ensure_dirs_exist()
+
+    # If URL was provided as argument, use it directly
+    if url:
+        video_id = extract_video_id(url) if "http" in url else url
+        process_video(video_id, force_extract, force_analysis)
+        raise typer.Exit()
+
+    # Interactive prompt — user preference
+    url = input("Enter the YouTube video URL (or ID): ").strip()
+    if not url:
+        rprint("[red]No URL provided. Exiting.")
+        raise typer.Exit(1)
+
+    video_id = extract_video_id(url) if "http" in url else url
+    process_video(video_id, force_extract, force_analysis)
     raise typer.Exit()
 
 
@@ -152,10 +192,10 @@ def _default(ctx: Context):
 
 @app.command()
 def extract(
-    url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
-    overwrite: bool = typer.Option(
-        False, "--overwrite", "-o", help="Force re-download if present"
-    ),
+        url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
+        overwrite: bool = typer.Option(
+            False, "--overwrite", "-o", help="Force re-download if present"
+        ),
 ):
     """Only fetch & store the transcript (skip analysis)."""
     ensure_dirs_exist()
@@ -166,50 +206,23 @@ def extract(
 
 @app.command()
 def analyze(
-    url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
-    force_extract: bool = typer.Option(
-        False, "--force-extract", "-E", help="Re-download transcript"
-    ),
-    force_analysis: bool = typer.Option(
-        False, "--force-analysis", "-A", help="Ignore cached verdict"
-    ),
+        url: str = typer.Argument(..., help="YouTube URL or 11-char ID"),
+        force_extract: bool = typer.Option(
+            False, "--force-extract", "-E", help="Re-download transcript"
+        ),
+        force_analysis: bool = typer.Option(
+            False, "--force-analysis", "-A", help="Ignore cached verdict"
+        ),
 ):
     """End-to-end pipeline (transcript + analysis) with cache controls."""
     ensure_dirs_exist()
     video_id = extract_video_id(url) if "http" in url else url
-
-    transcript_rec = _acquire_transcript(video_id, overwrite=force_extract)
-    if transcript_rec is None:
-        rprint("[red]Could not acquire transcript; aborting.")
-        raise typer.Exit(1)
-
-    analyzer = _get_analyzer()
-
-    if not force_analysis:
-        cached = analyzer.last_verdict_for_video(video_id)
-        if cached:
-            rprint("[green]Using cached analysis "
-                   "(--force-analysis to override):")
-            rprint(_pretty_json(cached.model_dump()))
-            raise typer.Exit()
-
-    rprint("[cyan]\nRunning OpenAI analysis … this might take a while.")
-    verdict = asyncio.run(analyzer.analyze(transcript_rec))
-
-    rprint("\n[bold magenta]— Analysis Result —")
-    pretty = _pretty_json(verdict.model_dump())
-    rprint(pretty)
-
-    results_dir = Path(RESULTS_DIR)
-    results_dir.mkdir(parents=True, exist_ok=True)
-    out = results_dir / f"analysis_{video_id}_{verdict.timestamp:%Y%m%d_%H%M%S}.json"
-    _save_json_to_file(verdict.model_dump(), out)
-    rprint(f"[green]\nResult saved to: {out}")
+    process_video(video_id, force_extract, force_analysis)
 
 
 @app.command(name="list")
 def _list(
-    limit: int = typer.Option(10, "--limit", "-n", help="Rows to show"),
+        limit: int = typer.Option(10, "--limit", "-n", help="Rows to show"),
 ):
     """Show the latest transcripts already in the DB."""
     rows = _get_analyzer().list_available_transcripts(limit)
