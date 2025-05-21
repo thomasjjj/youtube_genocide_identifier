@@ -1,4 +1,4 @@
-# youtube_transcript.py – download & persist captions (shared db.connect_db)
+# db.py – connect_db function and database operations
 # -------------------------------------------------------------------------
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -25,6 +26,20 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+
+# ---------------------------------------------------------------------------
+# Database connection
+# ---------------------------------------------------------------------------
+
+@contextmanager
+def connect_db():
+    """Context-managed SQLite connection with row factory."""
+    conn = sqlite3.connect(settings.db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 # ---------------------------------------------------------------------------
 # URL helpers
@@ -85,11 +100,19 @@ def _ensure_transcripts_table(conn: sqlite3.Connection) -> None:
             video_title TEXT,
             channel_name TEXT,
             transcript_text TEXT NOT NULL,
+            transcript_language TEXT,
             extraction_date TIMESTAMP NOT NULL
         );
         """
     )
     conn.commit()
+
+    # Check if transcript_language column exists, add it if not
+    try:
+        conn.execute("SELECT transcript_language FROM transcripts LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE transcripts ADD COLUMN transcript_language TEXT;")
+        conn.commit()
 
 
 def _transcript_exists(conn: sqlite3.Connection, video_id: str) -> bool:
@@ -101,6 +124,7 @@ def save_transcript(
     video_id: str,
     video_title: Optional[str] = None,
     channel_name: Optional[str] = None,
+    transcript_language: Optional[str] = None,
     overwrite: bool = False,
 ) -> Tuple[Path, bool]:
     ensure_dirs_exist()
@@ -128,18 +152,23 @@ def save_transcript(
                 logger.info("Transcript for %s already in DB; skipping insert.", video_id)
                 return file_path, False
         conn.execute(
-            "INSERT INTO transcripts (video_id, video_title, channel_name, transcript_text, extraction_date) VALUES (?, ?, ?, ?, ?)",
+            """
+            INSERT INTO transcripts (video_id, video_title, channel_name, 
+                                     transcript_text, transcript_language, extraction_date) 
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
             (
                 video_id,
                 video_title,
                 channel_name,
                 "\n".join(e["text"] for e in transcript),
+                transcript_language,
                 datetime.utcnow().isoformat(),
             ),
         )
         conn.commit()
         saved = True
-        logger.info("Transcript stored in DB (video_id=%s)", video_id)
+        logger.info("Transcript stored in DB (video_id=%s, language=%s)", video_id, transcript_language or "unknown")
     return file_path, saved
 
 
