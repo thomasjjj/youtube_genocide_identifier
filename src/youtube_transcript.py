@@ -9,6 +9,9 @@ from urllib.parse import urlparse, parse_qs
 # Import configuration settings
 from config import DATA_DIR, DB_PATH, TRANSCRIPTS_DIR, ensure_dirs_exist
 
+# Import the video metadata function
+from src.youtube_metadata import get_video_metadata, get_video_metadata_pytube
+
 
 def extract_video_id(youtube_url):
     """
@@ -97,7 +100,7 @@ def format_time(seconds):
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def save_transcript(transcript, video_id, video_title=None):
+def save_transcript(transcript, video_id, video_title=None, channel_name=None):
     """
     Save the transcript to a file and database.
 
@@ -105,12 +108,38 @@ def save_transcript(transcript, video_id, video_title=None):
         transcript (list): Raw transcript data.
         video_id (str): YouTube video ID.
         video_title (str, optional): Title of the video.
+        channel_name (str, optional): Name of the channel.
 
     Returns:
         tuple: (filename, success)
     """
     # Ensure directories exist
     ensure_dirs_exist()
+
+    # If video title or channel name wasn't provided, try to fetch them automatically
+    if not video_title or not channel_name:
+        # First try with yt-dlp
+        auto_title, auto_channel = get_video_metadata(video_id)
+
+        # If that fails, try with pytube as a fallback
+        if not auto_title or not auto_channel:
+            auto_title, auto_channel = get_video_metadata_pytube(video_id)
+
+        # Use the automatically retrieved values if they exist
+        if auto_title and not video_title:
+            video_title = auto_title
+            print(f"Automatically retrieved video title: {video_title}")
+
+        if auto_channel and not channel_name:
+            channel_name = auto_channel
+            print(f"Automatically retrieved channel name: {channel_name}")
+
+    # Use defaults if we still don't have metadata
+    if not video_title:
+        video_title = f"Unknown Title - {video_id}"
+
+    if not channel_name:
+        channel_name = "Unknown Channel"
 
     # Format the transcript for file storage
     formatted_transcript = format_transcript(transcript)
@@ -167,8 +196,8 @@ def save_transcript(transcript, video_id, video_title=None):
                        VALUES (?, ?, ?, ?, ?)
                        ''', (
                            video_id,
-                           video_title or f"Unknown Title - {video_id}",
-                           "Unknown Channel",  # This could be fetched from the YouTube API with a separate function
+                           video_title,
+                           channel_name,
                            "\n".join([entry['text'] for entry in transcript]),
                            datetime.now().isoformat()
                        ))
@@ -195,17 +224,39 @@ def main():
         # Extract the video ID
         video_id = extract_video_id(youtube_url)
 
-        # Optional: Ask for video title
-        video_title = input("Enter the video title (optional, press Enter to skip): ").strip()
-        if not video_title:
-            video_title = f"Unknown Title - {video_id}"
-
         # Get the transcript
         transcript_data = get_transcript(video_id)
 
         if transcript_data:
+            # Try to automatically get video metadata
+            video_title, channel_name = get_video_metadata(video_id)
+
+            # If automatic retrieval fails, ask the user
+            if not video_title:
+                video_title = input(
+                    "Could not automatically retrieve video title. Please enter it (optional, press Enter to skip): ").strip()
+                if not video_title:
+                    video_title = f"Unknown Title - {video_id}"
+            else:
+                print(f"Automatically retrieved video title: {video_title}")
+                override = input("Do you want to override this title? (y/n, press Enter for no): ").strip().lower()
+                if override == 'y':
+                    video_title = input("Enter the video title: ").strip()
+
+            if not channel_name:
+                channel_name = input(
+                    "Could not automatically retrieve channel name. Please enter it (optional, press Enter to skip): ").strip()
+                if not channel_name:
+                    channel_name = "Unknown Channel"
+            else:
+                print(f"Automatically retrieved channel name: {channel_name}")
+                override = input(
+                    "Do you want to override this channel name? (y/n, press Enter for no): ").strip().lower()
+                if override == 'y':
+                    channel_name = input("Enter the channel name: ").strip()
+
             # Save the transcript
-            filename, db_success = save_transcript(transcript_data, video_id, video_title)
+            filename, db_success = save_transcript(transcript_data, video_id, video_title, channel_name)
 
             # Preview the transcript
             with open(filename, 'r', encoding='utf-8') as f:

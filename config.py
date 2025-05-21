@@ -11,15 +11,18 @@ BASE_DIR = Path(__file__).parent.absolute()
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "youtube_transcripts.db"
 TRANSCRIPTS_DIR = DATA_DIR / "transcripts"
+RESULTS_DIR = DATA_DIR / "individual_results"  # New directory for results
 
 
 # Ensure required directories exist
 def ensure_dirs_exist():
     """Create necessary directories if they don't exist."""
-    for directory in [DATA_DIR, TRANSCRIPTS_DIR]:
+    for directory in [DATA_DIR, TRANSCRIPTS_DIR, RESULTS_DIR]:  # Added RESULTS_DIR
+        # Make sure directory is a Path object
+        directory = Path(directory) if isinstance(directory, str) else directory
         directory.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Ensured project directories exist: {DATA_DIR}, {TRANSCRIPTS_DIR}")
+    logger.info(f"Ensured project directories exist: {DATA_DIR}, {TRANSCRIPTS_DIR}, {RESULTS_DIR}")
 
 
 # Environment variables management
@@ -69,7 +72,7 @@ def get_openai_api_key():
 
 
 # Default OpenAI model settings
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-4o-mini"
 
 
 # Application settings
@@ -79,7 +82,8 @@ def get_app_settings():
         "openai_api_key": get_openai_api_key(),
         "model": os.environ.get("OPENAI_MODEL", DEFAULT_MODEL),
         "db_path": os.environ.get("DB_PATH", str(DB_PATH)),
-        "transcripts_dir": os.environ.get("TRANSCRIPTS_DIR", str(TRANSCRIPTS_DIR))
+        "transcripts_dir": os.environ.get("TRANSCRIPTS_DIR", str(TRANSCRIPTS_DIR)),
+        "results_dir": os.environ.get("RESULTS_DIR", str(RESULTS_DIR))  # Add results_dir to settings
     }
 
 
@@ -91,3 +95,5 @@ ensure_dirs_exist()
 APP_SETTINGS = get_app_settings()
 OPENAI_API_KEY = APP_SETTINGS["openai_api_key"]
 MODEL = APP_SETTINGS["model"]
+# Make sure RESULTS_DIR is a Path object when exported
+RESULTS_DIR = Path(APP_SETTINGS["results_dir"])
