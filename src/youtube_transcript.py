@@ -333,10 +333,12 @@ def _vtt_to_segments(vtt_text: str) -> List[Dict[str, Any]]:
     for block in _re.split(r"\n\s*\n", vtt_text.strip()):
         lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
         if len(lines) < 2:
+            logger.debug("Skipping VTT block with insufficient lines: %r", block)
             continue
         # optional cue id at lines[0]; timings line contains '-->'
         timing_idx = 0 if "-->" in lines[0] else 1
         if "-->" not in lines[timing_idx]:
+            logger.debug("Skipping VTT block without timing: %r", block)
             continue
         start_s, end_s = [x.strip() for x in lines[timing_idx].split("-->")[:2]]
         text = " ".join(lines[timing_idx + 1 :])
@@ -346,7 +348,10 @@ def _vtt_to_segments(vtt_text: str) -> List[Dict[str, Any]]:
             segments.append(
                 {"text": text, "start": start, "duration": max(0.0, end - start)}
             )
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Failed to parse VTT timing %s --> %s: %s", start_s, end_s, exc
+            )
             continue
     return segments
 
