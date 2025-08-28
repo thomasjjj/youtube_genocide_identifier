@@ -31,8 +31,6 @@ from youtube_transcript_api._errors import (
 # ── local imports ─────────────────────────────────────────────────────────
 from config import settings, ensure_dirs_exist
 
-# If this file lives inside the same `src` package as youtube_metadata.py
-# a relative import is safest.  Fall back to absolute if you prefer.
 try:
     from .youtube_metadata import (
         get_video_metadata,

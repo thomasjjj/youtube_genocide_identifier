@@ -34,10 +34,22 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(..., env="OPENAI_API_KEY")
 
     # Runtime configuration
-    openai_model: str = Field("gpt-4o-mini", env="OPENAI_MODEL")
+    openai_model: str = Field("gpt-5", env="OPENAI_MODEL")
     db_path: Path = Field(DB_PATH, env="DB_PATH")
     transcripts_dir: Path = Field(TRANSCRIPTS_DIR, env="TRANSCRIPTS_DIR")
     results_dir: Path = Field(RESULTS_DIR, env="RESULTS_DIR")
+
+    # YouTube transcript fetching tweaks
+    # Optional path to a cookies.txt file exported from your browser (Netscape format).
+    youtube_cookies_path: Path | None = Field(None, env="YOUTUBE_COOKIES")
+    # Optional HTTPS proxy, e.g. "http://127.0.0.1:8888" or "http://user:pass@host:port"
+    https_proxy: str | None = Field(None, env="HTTPS_PROXY")
+    # Preferred language codes, comma-separated (fallbacks tried in order, then “any available”)
+    youtube_langs_csv: str = Field("en,en-GB,en-US", env="YOUTUBE_LANGS")
+
+    @property
+    def youtube_languages(self) -> list[str]:
+        return [x.strip() for x in self.youtube_langs_csv.split(",") if x.strip()]
 
     # Allow ${HOME}/… etc. in paths
     @validator("db_path", "transcripts_dir", "results_dir", pre=True)

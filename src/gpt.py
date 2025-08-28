@@ -176,9 +176,9 @@ class TranscriptAnalyzer:
         progress.start()
         try:
             response = await asyncio.to_thread(
-                self.client.chat.completions.create,
+                self.client.responses.create,
                 model=self.model,
-                messages=[
+                input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
@@ -187,7 +187,7 @@ class TranscriptAnalyzer:
         finally:
             progress.stop()
 
-        raw = response.choices[0].message.content
+        raw = response.output_text
         try:
             parsed = json.loads(raw)
             verdict = GenocideVerdict(**parsed)
@@ -196,7 +196,7 @@ class TranscriptAnalyzer:
             raise RuntimeError("Model returned invalid JSON – see logs.") from exc
 
         verdict.model = getattr(response, "model", None)
-        verdict.tokens_used = getattr(getattr(response, 'usage', {}), 'total_tokens', None)
+        verdict.tokens_used = getattr(response.usage, "total_tokens", None)
         verdict.video_title = transcript_rec['video_title']
         verdict.timestamp = datetime.utcnow()
 
